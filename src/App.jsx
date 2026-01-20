@@ -29,7 +29,7 @@ const TopNav = () => {
       <div className="flex items-center gap-4">
         <div className="bg-white rounded-lg p-1.5 shadow-lg border border-white/10 w-32 h-12 flex items-center justify-center">
           <img
-            src="/kap-logo.png"
+            src={`${import.meta.env.BASE_URL}kap-logo.png`}
             alt="KAP Edutech"
             className="w-full h-full object-contain"
           />
@@ -75,7 +75,7 @@ const TopNav = () => {
 
 function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
       <div className="min-h-screen bg-slate-50">
         <TopNav />
         {/* Main Content: Adjusted padding for TopNav */}
