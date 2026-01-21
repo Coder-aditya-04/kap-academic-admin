@@ -15,6 +15,7 @@ const ScannerPage = () => {
   const canvasRef = useRef();
   const isProcessing = useRef(false);
   const lastScanTime = useRef({});
+  const audioCtxRef = useRef(null);
 
   // 1. SETUP: Configure AI & Load Models (TinyFace for Speed)
   useEffect(() => {
@@ -71,35 +72,36 @@ const ScannerPage = () => {
     }
   }, [modelsLoaded]);
 
-  // UNLOCK AUDIO (Tap Handler)
+  // UNLOCK AUDIO (Tap Handler) + Fast Beep Setup
   const unlockAudio = () => {
-    // Just playing a silent buffer to unlock the audio engine
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    oscillator.start();
-    oscillator.stop(audioCtx.currentTime + 0.001);
-
-    // Also init Speech Synthesis
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Clear any stuck speech
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
     }
-
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+    // Play silent beep to warm up
+    playBeep(0);
     setIsAudioUnlocked(true);
   };
 
-  // TTS: "Welcome, Name"
-  const speakWelcome = (fullName) => {
-    if ('speechSynthesis' in window) {
-      const firstName = fullName.split(' ')[0]; // Just first name
-      const utterance = new SpeechSynthesisUtterance(`Welcome, ${firstName}`);
-      utterance.rate = 1.0;
-      utterance.pitch = 1.1;
-      utterance.volume = 1.0;
-      window.speechSynthesis.speak(utterance);
-    }
+  // Instant Beep (No Delay)
+  const playBeep = (vol = 0.1) => {
+    if (!audioCtxRef.current) return;
+    const ctx = audioCtxRef.current;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.3);
+    osc.stop(ctx.currentTime + 0.3);
   };
 
   // 3. LOGIC
@@ -137,8 +139,8 @@ const ScannerPage = () => {
 
       setLastLog({ name, status: newStatus, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) });
 
-      // SPEAK WELCOME
-      speakWelcome(name);
+      // INSTANT BEEP
+      playBeep(0.3);
 
       lastScanTime.current[rollNumber] = now;
 
@@ -155,10 +157,6 @@ const ScannerPage = () => {
   };
 
   const drawBox = (ctx, box, color, lineWidth = 2) => {
-    // Hide box in "Circle Mode" to keep it clean, 
-    // UNLESS it's a security warning
-    if (color === '#00ff9d') return; // Don't draw green box, circle is enough
-
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
@@ -171,9 +169,9 @@ const ScannerPage = () => {
     setInterval(async () => {
       if (videoRef.current && canvasRef.current && faceMatcher && !isProcessing.current) {
 
-        // Use TinyFaceDetector (Fastest for Mobile)
-        // Strict Threshold: 0.8
-        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.8 });
+        // Use TinyFaceDetector
+        // MODERATE THRESHOLD: 0.7 (Better for Tablets/Mobile, still strict enough)
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.7 });
 
         const detection = await faceapi.detectSingleFace(videoRef.current, options)
           .withFaceLandmarks()
@@ -200,16 +198,16 @@ const ScannerPage = () => {
             return;
           }
 
-          // 2. Score Check (Strict)
-          // If score is < 0.85, it might be a screen glare or bad lighting
-          if (score < 0.85) {
-            setSecurityWarning("Low Quality / Spoof Detected");
+          // 2. Score Check
+          // 0.85 is very high, 0.8 is safer for varying light
+          if (score < 0.80) {
+            setSecurityWarning("Low Quality / Glare");
             drawBox(ctx, box, 'orange');
             setDetectingName(null);
             return;
           }
 
-          // 3. Center Check
+          // 3. Center Check (35% deviation allowed)
           const centerX = box.x + (box.width / 2);
           const screenCenter = displaySize.width / 2;
           const offset = Math.abs(centerX - screenCenter);
@@ -226,10 +224,18 @@ const ScannerPage = () => {
           if (result.label !== 'unknown') {
             const name = result.label.split(' (')[0];
             setDetectingName(name);
+
+            // DRAW NAME & BOX (Requested)
+            ctx.font = 'bold 24px sans-serif';
+            ctx.fillStyle = '#00ff9d';
+            ctx.fillText(name, box.x, box.y - 10);
+            drawBox(ctx, box, '#00ff9d', 4);
+
             logAttendance(result.label);
-            // Circle turns GREEN via CSS state (no need to draw text on canvas)
           } else {
             setDetectingName(null);
+            // Optional: Draw red box for unknown
+            drawBox(ctx, box, 'rgba(255,0,0,0.3)', 2);
           }
         } else {
           setSecurityWarning(null);
@@ -244,7 +250,7 @@ const ScannerPage = () => {
   return (
     <div className="min-h-screen bg-black flex items-center justify-center font-sans overflow-hidden">
 
-      {/* TAP TO START OVERLAY (Fixes Audio Issue) */}
+      {/* TAP TO START OVERLAY */}
       {!isAudioUnlocked && (
         <div
           onClick={unlockAudio}
@@ -264,7 +270,7 @@ const ScannerPage = () => {
           <div className="bg-white p-10 rounded-full mb-6 shadow-2xl animate-bounce-short">
             <CheckCircle2 className="w-16 h-16 text-green-600" />
           </div>
-          <h1 className="text-white text-4xl md:text-6xl font-black text-center mb-4 drop-shadow-md">
+          <h1 className="text-white text-4xl lg:text-6xl font-black text-center mb-4 drop-shadow-md">
             Welcome, {lastLog.name.split(' ')[0]}!
           </h1>
           <p className="text-green-100 text-xl font-medium tracking-wide">
@@ -273,20 +279,20 @@ const ScannerPage = () => {
         </div>
       )}
 
-      {/* RESPONSIVE CONTAINER */}
+      {/* RESPONSIVE CONTAINER - CHANGED md: to lg: for Tablets */}
       <div className="
-         relative w-full h-screen 
-         md:h-auto md:w-auto md:max-w-[1100px] md:aspect-video 
-         md:rounded-[2.5rem] md:border md:border-white/10 md:shadow-2xl 
-         bg-black overflow-hidden flex flex-col md:flex-row
+         relative w-full h-screen
+         lg:h-auto lg:w-auto lg:max-w-[1100px] lg:aspect-video
+         lg:rounded-[2.5rem] lg:border lg:border-white/10 lg:shadow-2xl
+         bg-black overflow-hidden flex flex-col lg:flex-row
       ">
 
         {/* CAMERA FEED */}
         <div className="relative flex-1 h-full bg-black flex items-center justify-center">
 
-          {/* FACE SEARCH CIRCLE GUIDE (Visual Only) */}
+          {/* CIRCLE GUIDE */}
           <div className="absolute inset-0 z-10 pointer-events-none">
-            {/* Dark Overlay with Hole punch effect is hard in pure CSS without mask image, 
+            {/* Dark Overlay with Hole punch effect is hard in pure CSS without mask image,
                  so we'll use a semi-transparent border trick or svg.
                  Simpler: Dark vignette + Glow Circle */}
 
@@ -311,7 +317,7 @@ const ScannerPage = () => {
           <div className="absolute top-6 left-6 z-20">
             <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-full border border-white/10 flex items-center gap-2">
               <div className={`w-2.5 h-2.5 rounded-full ${modelsLoaded ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-yellow-500'}`}></div>
-              <span className="text-white text-[10px] md:text-xs font-bold tracking-widest">{modelsLoaded ? "SECURE AI ONLINE" : "LOADING..."}</span>
+              <span className="text-white text-[10px] lg:text-xs font-bold tracking-widest">{modelsLoaded ? "SECURE AI ONLINE" : "LOADING..."}</span>
             </div>
           </div>
 
@@ -320,38 +326,38 @@ const ScannerPage = () => {
 
           {/* WARNINGS */}
           {securityWarning && !lastLog && (
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-30 w-max max-w-[90%] mt-40 md:mt-48">
-              <div className="bg-yellow-500/90 text-black px-6 py-3 rounded-full font-bold shadow-lg animate-pulse flex items-center gap-2 text-sm md:text-base">
+            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-30 w-max max-w-[90%] mt-40 lg:mt-48">
+              <div className="bg-yellow-500/90 text-black px-6 py-3 rounded-full font-bold shadow-lg animate-pulse flex items-center gap-2 text-sm lg:text-base">
                 <AlertTriangle className="w-5 h-5" /> {securityWarning}
               </div>
             </div>
           )}
         </div>
 
-        {/* INFO PANEL */}
+        {/* INFO PANEL - CHANGED md: to lg: */}
         <div className={`
             absolute bottom-0 left-0 right-0 z-30
-            md:relative md:w-96 md:h-auto
-            bg-gradient-to-t from-black via-black/90 to-transparent md:bg-neutral-900/95 
-            md:border-l md:border-white/5 
-            p-6 md:p-8 flex flex-col justify-end md:justify-between
+            lg:relative lg:w-96 lg:h-auto
+            bg-gradient-to-t from-black via-black/90 to-transparent lg:bg-neutral-900/95
+            lg:border-l lg:border-white/5
+            p-6 lg:p-8 flex flex-col justify-end lg:justify-between
         `}>
-          <div className="hidden md:block">
+          <div className="hidden lg:block">
             <div className="flex items-center gap-3 mb-8">
               <ScanFace className="w-8 h-8 text-blue-500" />
               <h1 className="text-white font-bold text-xl tracking-tight">Smart Gate</h1>
             </div>
           </div>
 
-          <div className="text-center md:text-left">
-            <div className="md:hidden flex flex-col items-center pb-8">
+          <div className="text-center lg:text-left">
+            <div className="lg:hidden flex flex-col items-center pb-8">
               <p className="text-white/80 text-sm font-medium mb-2 uppercase tracking-widest text-[10px]">Align Face in Circle</p>
               <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center mb-2 animate-pulse">
                 <ScanFace className="w-6 h-6 text-white" />
               </div>
             </div>
 
-            <div className="hidden md:block p-6 rounded-2xl bg-white/5 border border-white/10 text-center">
+            <div className="hidden lg:block p-6 rounded-2xl bg-white/5 border border-white/10 text-center">
               <ShieldCheck className="w-10 h-10 text-slate-500 mx-auto mb-3" />
               <p className="text-white text-sm font-bold">Secure Access</p>
               <p className="text-neutral-500 text-xs mt-2 leading-relaxed">
@@ -361,7 +367,7 @@ const ScannerPage = () => {
             </div>
           </div>
 
-          <div className="hidden md:block pt-6 border-t border-white/5 text-center">
+          <div className="hidden lg:block pt-6 border-t border-white/5 text-center">
             <p className="text-neutral-600 text-[10px] uppercase font-bold tracking-widest">KAP EDUTECH AI</p>
           </div>
         </div>
