@@ -17,7 +17,7 @@ const FaceEnrollment = () => {
   useEffect(() => {
     const loadResources = async () => {
       try {
-        const MODEL_URL = '/models';
+        const MODEL_URL = `${import.meta.env.BASE_URL}models`;
         await Promise.all([
           faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
           faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
@@ -122,8 +122,8 @@ const FaceEnrollment = () => {
               key={s.id}
               onClick={() => setSelectedStudent(s)}
               className={`p-4 rounded-xl cursor-pointer transition border flex justify-between items-center ${selectedStudent?.id === s.id
-                  ? 'bg-blue-600 text-white border-blue-600 shadow-md'
-                  : 'bg-gray-50 text-gray-700 border-transparent hover:bg-gray-100'
+                ? 'bg-blue-600 text-white border-blue-600 shadow-md'
+                : 'bg-gray-50 text-gray-700 border-transparent hover:bg-gray-100'
                 }`}
             >
               <div>
