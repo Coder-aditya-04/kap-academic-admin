@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as faceapi from '@vladmandic/face-api';
 import { supabase } from '../supabaseClient';
-import { LogIn, LogOut, Loader, ScanFace, ShieldCheck, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { ScanFace, ShieldCheck, AlertTriangle, CheckCircle2, Volume2 } from 'lucide-react';
 
 const ScannerPage = () => {
   const [modelsLoaded, setModelsLoaded] = useState(false);
@@ -9,6 +9,7 @@ const ScannerPage = () => {
   const [lastLog, setLastLog] = useState(null);
   const [detectingName, setDetectingName] = useState(null);
   const [securityWarning, setSecurityWarning] = useState(null);
+  const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
 
   const videoRef = useRef();
   const canvasRef = useRef();
@@ -39,12 +40,13 @@ const ScannerPage = () => {
         if (students && students.length > 0) {
           const labeledDescriptors = students.map(student => {
             const descriptor = new Float32Array(JSON.parse(student.face_descriptor));
+            // Use just the First Name for speaking to keep it short
             return new faceapi.LabeledFaceDescriptors(`${student.full_name} (${student.roll_number})`, [descriptor]);
           });
 
           // MODERN LIBRARY IS MORE SENSITIVE.
           // 0.40 is "Very Strict" - prevents wrong person entirely.
-          setFaceMatcher(new faceapi.FaceMatcher(labeledDescriptors, 0.40)); // Strict Matcher
+          setFaceMatcher(new faceapi.FaceMatcher(labeledDescriptors, 0.40));
           setModelsLoaded(true);
         }
       } catch (err) {
@@ -69,22 +71,35 @@ const ScannerPage = () => {
     }
   }, [modelsLoaded]);
 
-  // Reliable Sound (Web Audio API)
-  const playBeep = () => {
+  // UNLOCK AUDIO (Tap Handler)
+  const unlockAudio = () => {
+    // Just playing a silent buffer to unlock the audio engine
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const oscillator = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
-
     oscillator.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-
-    oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
-    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-
     oscillator.start();
-    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
-    oscillator.stop(audioCtx.currentTime + 0.5);
+    oscillator.stop(audioCtx.currentTime + 0.001);
+
+    // Also init Speech Synthesis
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Clear any stuck speech
+    }
+
+    setIsAudioUnlocked(true);
+  };
+
+  // TTS: "Welcome, Name"
+  const speakWelcome = (fullName) => {
+    if ('speechSynthesis' in window) {
+      const firstName = fullName.split(' ')[0]; // Just first name
+      const utterance = new SpeechSynthesisUtterance(`Welcome, ${firstName}`);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.1;
+      utterance.volume = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
   };
 
   // 3. LOGIC
@@ -121,14 +136,17 @@ const ScannerPage = () => {
       }]);
 
       setLastLog({ name, status: newStatus, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) });
-      playBeep(); // Trigger Sound
+
+      // SPEAK WELCOME
+      speakWelcome(name);
+
       lastScanTime.current[rollNumber] = now;
 
       setTimeout(() => {
         setLastLog(null);
         isProcessing.current = false;
         setDetectingName(null);
-      }, 3000); // 3 Second Success Screen
+      }, 3000);
 
     } catch (err) {
       console.error(err);
@@ -137,6 +155,10 @@ const ScannerPage = () => {
   };
 
   const drawBox = (ctx, box, color, lineWidth = 2) => {
+    // Hide box in "Circle Mode" to keep it clean, 
+    // UNLESS it's a security warning
+    if (color === '#00ff9d') return; // Don't draw green box, circle is enough
+
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
@@ -150,7 +172,7 @@ const ScannerPage = () => {
       if (videoRef.current && canvasRef.current && faceMatcher && !isProcessing.current) {
 
         // Use TinyFaceDetector (Fastest for Mobile)
-        // INCREASED THRESHOLD: 0.6 -> 0.8 to reject photos/screens
+        // Strict Threshold: 0.8
         const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.8 });
 
         const detection = await faceapi.detectSingleFace(videoRef.current, options)
@@ -204,17 +226,10 @@ const ScannerPage = () => {
           if (result.label !== 'unknown') {
             const name = result.label.split(' (')[0];
             setDetectingName(name);
-
-            ctx.font = 'bold 24px sans-serif';
-            ctx.fillStyle = '#00ff9d';
-            ctx.fillText(name, box.x, box.y - 10);
-
-            drawBox(ctx, box, '#00ff9d', 4);
             logAttendance(result.label);
+            // Circle turns GREEN via CSS state (no need to draw text on canvas)
           } else {
             setDetectingName(null);
-            // Don't draw box for unknown to keep UI clean, or draw subtle
-            drawBox(ctx, box, 'rgba(255,0,0,0.5)', 2);
           }
         } else {
           setSecurityWarning(null);
@@ -223,16 +238,27 @@ const ScannerPage = () => {
           if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         }
       }
-    }, 100); // 10 FPS
+    }, 100);
   };
 
   return (
     <div className="min-h-screen bg-black flex items-center justify-center font-sans overflow-hidden">
 
-      {/* 
-        FULL SCREEN SUCCESS OVERLAY 
-        (Triggers when lastLog is set)
-      */}
+      {/* TAP TO START OVERLAY (Fixes Audio Issue) */}
+      {!isAudioUnlocked && (
+        <div
+          onClick={unlockAudio}
+          className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-md flex flex-col items-center justify-center cursor-pointer animate-in fade-in duration-500"
+        >
+          <div className="w-24 h-24 bg-blue-600 rounded-full flex items-center justify-center mb-6 animate-bounce shadow-[0_0_50px_#2563eb]">
+            <Volume2 className="w-10 h-10 text-white" />
+          </div>
+          <h1 className="text-white text-3xl font-black tracking-widest uppercase mb-2">Tap to Activate</h1>
+          <p className="text-blue-200 text-lg">Enable Sound & Camera</p>
+        </div>
+      )}
+
+      {/* FULL SCREEN SUCCESS OVERLAY */}
       {lastLog && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-green-600 animate-in fade-in zoom-in duration-300">
           <div className="bg-white p-10 rounded-full mb-6 shadow-2xl animate-bounce-short">
@@ -256,11 +282,36 @@ const ScannerPage = () => {
       ">
 
         {/* CAMERA FEED */}
-        <div className="relative flex-1 h-full bg-black">
+        <div className="relative flex-1 h-full bg-black flex items-center justify-center">
+
+          {/* FACE SEARCH CIRCLE GUIDE (Visual Only) */}
+          <div className="absolute inset-0 z-10 pointer-events-none">
+            {/* Dark Overlay with Hole punch effect is hard in pure CSS without mask image, 
+                 so we'll use a semi-transparent border trick or svg.
+                 Simpler: Dark vignette + Glow Circle */}
+
+            <div className="absolute inset-0 bg-radial-gradient-vignette opacity-60"></div>
+
+            {/* THE GLOWING CIRCLE */}
+            <div className={`
+                absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2
+                w-[70vw] h-[70vw] max-w-[320px] max-h-[320px]
+                border-[3px] border-dashed rounded-full
+                transition-all duration-300
+                ${detectingName ? 'border-green-400 shadow-[0_0_50px_#4ade80]' : 'border-white/30 shadow-[0_0_30px_rgba(255,255,255,0.1)]'}
+             `}>
+              {/* Crosshair corners */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1 h-3 bg-white/50"></div>
+              <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-3 bg-white/50"></div>
+              <div className="absolute left-0 top-1/2 -translate-y-1/2 w-3 h-1 bg-white/50"></div>
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-1 bg-white/50"></div>
+            </div>
+          </div>
+
           <div className="absolute top-6 left-6 z-20">
             <div className="bg-black/60 backdrop-blur px-4 py-2 rounded-full border border-white/10 flex items-center gap-2">
               <div className={`w-2.5 h-2.5 rounded-full ${modelsLoaded ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-yellow-500'}`}></div>
-              <span className="text-white text-[10px] md:text-xs font-bold tracking-widest">{modelsLoaded ? "FAST AI ACTIVE" : "LOADING..."}</span>
+              <span className="text-white text-[10px] md:text-xs font-bold tracking-widest">{modelsLoaded ? "SECURE AI ONLINE" : "LOADING..."}</span>
             </div>
           </div>
 
@@ -269,7 +320,7 @@ const ScannerPage = () => {
 
           {/* WARNINGS */}
           {securityWarning && !lastLog && (
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-30 w-max max-w-[90%]">
+            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-30 w-max max-w-[90%] mt-40 md:mt-48">
               <div className="bg-yellow-500/90 text-black px-6 py-3 rounded-full font-bold shadow-lg animate-pulse flex items-center gap-2 text-sm md:text-base">
                 <AlertTriangle className="w-5 h-5" /> {securityWarning}
               </div>
@@ -293,11 +344,11 @@ const ScannerPage = () => {
           </div>
 
           <div className="text-center md:text-left">
-            <div className="md:hidden flex flex-col items-center pb-4">
+            <div className="md:hidden flex flex-col items-center pb-8">
+              <p className="text-white/80 text-sm font-medium mb-2 uppercase tracking-widest text-[10px]">Align Face in Circle</p>
               <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center mb-2 animate-pulse">
                 <ScanFace className="w-6 h-6 text-white" />
               </div>
-              <p className="text-white font-bold">Ready to Scan</p>
             </div>
 
             <div className="hidden md:block p-6 rounded-2xl bg-white/5 border border-white/10 text-center">
@@ -318,5 +369,4 @@ const ScannerPage = () => {
     </div>
   );
 };
-
 export default ScannerPage;
