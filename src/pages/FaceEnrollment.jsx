@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import * as faceapi from 'face-api.js';
+import * as faceapi from '@vladmandic/face-api';
 import { supabase } from '../supabaseClient';
 import { Camera, Save, UserCheck, AlertTriangle, Loader, Search } from 'lucide-react';
 
