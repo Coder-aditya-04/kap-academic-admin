@@ -42,8 +42,9 @@ const ScannerPage = () => {
             return new faceapi.LabeledFaceDescriptors(`${student.full_name} (${student.roll_number})`, [descriptor]);
           });
 
-          // Threshold 0.45 (Strict)
-          setFaceMatcher(new faceapi.FaceMatcher(labeledDescriptors, 0.45));
+          // MODERN LIBRARY IS MORE SENSITIVE.
+          // 0.40 is "Very Strict" - prevents wrong person entirely.
+          setFaceMatcher(new faceapi.FaceMatcher(labeledDescriptors, 0.40)); // Strict Matcher
           setModelsLoaded(true);
         }
       } catch (err) {
@@ -149,8 +150,8 @@ const ScannerPage = () => {
       if (videoRef.current && canvasRef.current && faceMatcher && !isProcessing.current) {
 
         // Use TinyFaceDetector (Fastest for Mobile)
-        // inputSize 512 gives good balance of speed vs detection range
-        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
+        // INCREASED THRESHOLD: 0.6 -> 0.8 to reject photos/screens
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.8 });
 
         const detection = await faceapi.detectSingleFace(videoRef.current, options)
           .withFaceLandmarks()
@@ -177,8 +178,14 @@ const ScannerPage = () => {
             return;
           }
 
-          // 2. Score Check (0.5 is adequate for TinyFace, if < 0.5 it won't detect anyway)
-          // But strict match is handled by FaceMatcher (0.45)
+          // 2. Score Check (Strict)
+          // If score is < 0.85, it might be a screen glare or bad lighting
+          if (score < 0.85) {
+            setSecurityWarning("Low Quality / Spoof Detected");
+            drawBox(ctx, box, 'orange');
+            setDetectingName(null);
+            return;
+          }
 
           // 3. Center Check
           const centerX = box.x + (box.width / 2);
