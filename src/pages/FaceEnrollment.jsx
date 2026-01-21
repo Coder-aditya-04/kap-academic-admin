@@ -1,17 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as faceapi from 'face-api.js';
 import { supabase } from '../supabaseClient';
-import { Camera, Save, UserCheck, AlertTriangle, Loader } from 'lucide-react';
+import { Camera, Save, UserCheck, AlertTriangle, Loader, Search } from 'lucide-react';
 
 const FaceEnrollment = () => {
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [students, setStudents] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [detection, setDetection] = useState(null);
   const [cameraError, setCameraError] = useState(null);
 
   const videoRef = useRef();
   const canvasRef = useRef();
+
+  const filteredStudents = students.filter(s =>
+    s.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    s.roll_number.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   // 1. Load Models & Students
   useEffect(() => {
@@ -113,11 +119,23 @@ const FaceEnrollment = () => {
         <div className="mb-6">
           <h2 className="font-bold text-2xl mb-2 bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">Face Enrollment</h2>
           <p className="text-slate-600 text-sm">Students awaiting AI training</p>
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search student..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+            />
+          </div>
         </div>
         <div className="overflow-y-auto flex-1 space-y-2">
-          {students.length === 0 ? (
-            <p className="text-gray-400 text-sm">No pending students found.</p>
-          ) : students.map(s => (
+          {filteredStudents.length === 0 ? (
+            <p className="text-gray-400 text-sm p-4 text-center">
+              {searchQuery ? "No matching students." : "No pending students found."}
+            </p>
+          ) : filteredStudents.map(s => (
             <div
               key={s.id}
               onClick={() => setSelectedStudent(s)}

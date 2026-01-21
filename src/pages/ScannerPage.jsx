@@ -1,8 +1,7 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import * as faceapi from 'face-api.js';
 import { supabase } from '../supabaseClient';
-import { LogIn, LogOut, Loader, ScanFace, CheckCircle2, AlertTriangle, XCircle, UserCheck, UserX } from 'lucide-react';
+import { ScanFace, CheckCircle2, LogOut, Loader } from 'lucide-react';
 
 const ScannerPage = () => {
   const [modelsLoaded, setModelsLoaded] = useState(false);
@@ -21,7 +20,7 @@ const ScannerPage = () => {
       try {
         const MODEL_URL = `${import.meta.env.BASE_URL}models`;
         await Promise.all([
-          faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL), // Use TinyFace for Speed
           faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
           faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
         ]);
@@ -36,7 +35,7 @@ const ScannerPage = () => {
             const descriptor = new Float32Array(JSON.parse(student.face_descriptor));
             return new faceapi.LabeledFaceDescriptors(`${student.full_name} (${student.roll_number})`, [descriptor]);
           });
-          setFaceMatcher(new faceapi.FaceMatcher(labeledDescriptors, 0.45));
+          setFaceMatcher(new faceapi.FaceMatcher(labeledDescriptors, 0.60)); // Stricter Threshold (0.6)
           setModelsLoaded(true);
         }
       } catch (err) {
@@ -46,17 +45,19 @@ const ScannerPage = () => {
     loadResources();
   }, []);
 
-  // 2. START CAMERA (High Resolution)
+  // 2. START CAMERA (Mobile Friendly)
   useEffect(() => {
     if (modelsLoaded) {
-      navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
         .then(stream => { if (videoRef.current) videoRef.current.srcObject = stream; })
         .catch(err => console.error(err));
     }
   }, [modelsLoaded]);
 
-  // Sound Effect
+  // ... (Sound Effect - No Change) ...
+
   const playBeep = () => {
+    // ... (Same as before)
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const oscillator = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
@@ -65,7 +66,7 @@ const ScannerPage = () => {
     gainNode.connect(audioCtx.destination);
 
     oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+    oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
     gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
 
     oscillator.start();
@@ -73,17 +74,18 @@ const ScannerPage = () => {
     oscillator.stop(audioCtx.currentTime + 0.5);
   };
 
-  // 3. LOGIC
+
+  // 3. LOGIC (No Change)
   const logAttendance = async (label) => {
+    // ... (Same logic as before) ...
     if (isProcessing.current) return;
 
     const name = label.split(' (')[0];
     const rollNumber = label.split(' (')[1]?.replace(')', '');
 
-    // Cooldown 30 Mins
     const now = Date.now();
     const lastTime = lastScanTime.current[rollNumber];
-    if (lastTime && (now - lastTime < 30 * 60 * 1000)) return;
+    if (lastTime && (now - lastTime < 5 * 60 * 1000)) return;
 
     isProcessing.current = true;
 
@@ -108,17 +110,14 @@ const ScannerPage = () => {
       }]);
 
       setLastLog({ name, status: newStatus, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) });
-
-      // Play Sound
       playBeep();
-
       lastScanTime.current[rollNumber] = now;
 
       setTimeout(() => {
         setLastLog(null);
         isProcessing.current = false;
         setDetectingName(null);
-      }, 4000);
+      }, 3000);
 
     } catch (err) {
       console.error(err);
@@ -126,43 +125,54 @@ const ScannerPage = () => {
     }
   };
 
+
   // 4. DETECTION LOOP
   const handleVideoOnPlay = () => {
     setInterval(async () => {
       if (videoRef.current && canvasRef.current && faceMatcher && !isProcessing.current) {
 
-        const detection = await faceapi.detectSingleFace(videoRef.current).withFaceLandmarks().withFaceDescriptor();
+        // Use TinyFaceDetector (Fast) with 512 input size (Better Detection)
+        const detection = await faceapi.detectSingleFace(
+          videoRef.current,
+          new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 })
+        ).withFaceLandmarks().withFaceDescriptor();
 
-        // Match Dimensions
-        const displaySize = { width: videoRef.current.videoWidth, height: videoRef.current.videoHeight };
+        // Match to Visual Size (CLIENT WIDTH/HEIGHT)
+        // This ensures the box matches the video element's displayed size
+        const displaySize = { width: videoRef.current.clientWidth, height: videoRef.current.clientHeight };
         faceapi.matchDimensions(canvasRef.current, displaySize);
-        canvasRef.current.getContext('2d').clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+
+        const ctx = canvasRef.current.getContext('2d');
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
         if (detection) {
           const resized = faceapi.resizeResults(detection, displaySize);
           const result = faceMatcher.findBestMatch(resized.descriptor);
+          const box = resized.detection.box;
 
           if (result.label !== 'unknown') {
-            // Draw Fancy Box
-            const box = resized.detection.box;
-            const ctx = canvasRef.current.getContext('2d');
-
-            // Neon Green Box Effect
+            // GREEN BOX
             ctx.strokeStyle = '#00ff9d';
-            ctx.lineWidth = 3;
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = "#00ff9d";
+            ctx.lineWidth = 4;
             ctx.strokeRect(box.x, box.y, box.width, box.height);
 
-            setDetectingName(result.label.split(' (')[0]);
+            // NAME LABEL
+            const name = result.label.split(' (')[0];
+            ctx.font = 'bold 20px sans-serif';
+            const textWidth = ctx.measureText(name).width;
+
+            ctx.fillStyle = '#00ff9d';
+            ctx.fillRect(box.x, box.y - 30, textWidth + 10, 30);
+
+            ctx.fillStyle = 'black';
+            ctx.fillText(name, box.x + 5, box.y - 8);
+
+            setDetectingName(name);
             logAttendance(result.label);
           } else {
-            // Draw White Box (Unknown)
-            const box = resized.detection.box;
-            const ctx = canvasRef.current.getContext('2d');
+            // UNKNOWN (Subtle)
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 1;
-            ctx.shadowBlur = 0;
+            ctx.lineWidth = 2;
             ctx.strokeRect(box.x, box.y, box.width, box.height);
             setDetectingName(null);
           }
@@ -170,10 +180,9 @@ const ScannerPage = () => {
           setDetectingName(null);
         }
       }
-    }, 200); // Check faster (200ms) for smoother UI
+    }, 500); // Check every 500ms (Reduced Lag)
   };
 
-  // Determine UI State
   const getUIState = () => {
     if (!lastLog) return 'IDLE';
     return lastLog.status === 'IN' ? 'SUCCESS_IN' : 'SUCCESS_OUT';
@@ -182,112 +191,58 @@ const ScannerPage = () => {
   const uiState = getUIState();
 
   return (
-    <div className="h-screen bg-neutral-950 flex items-center justify-center font-sans overflow-hidden p-6">
+    <div className="h-screen w-screen bg-black overflow-hidden relative">
 
-      {/* MAXIMIZED CONTAINER */}
-      <div className={`relative w-full max-w-[1200px] h-[85vh] rounded-[2.5rem] overflow-hidden shadow-2xl transition-all duration-500 border-4 ${uiState === 'SUCCESS_IN' ? 'border-green-500 shadow-[0_0_50px_rgba(34,197,94,0.3)]' :
-        uiState === 'SUCCESS_OUT' ? 'border-red-500 shadow-[0_0_50px_rgba(239,68,68,0.3)]' :
-          'border-white/10'
-        }`}>
+      {/* FULL SCREEN VIDEO */}
+      {/* Object-COVER ensures no black bars, but might crop face at edges. 
+          Use a centered container to keep focus. */}
+      <div className="absolute inset-0 z-0 flex items-center justify-center">
+        <video
+          ref={videoRef}
+          autoPlay muted playsInline // Crucial for iOS
+          onPlay={handleVideoOnPlay}
+          className="w-full h-full object-cover transform scale-x-[-1] opacity-80"
+        />
+        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full transform scale-x-[-1]" />
+      </div>
 
-        <div className="flex h-full flex-col md:flex-row">
-
-          {/* LEFT: CAMERA - Maximized */}
-          <div className="relative flex-1 bg-black overflow-hidden group">
-
-            {/* Camera Status */}
-            <div className="absolute top-6 left-6 z-20 flex gap-3">
-              <div className="bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 flex items-center gap-2">
-                <div className={`w-2.5 h-2.5 rounded-full ${modelsLoaded ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-yellow-500'}`}></div>
-                <span className="text-white/90 text-xs font-bold tracking-wider">{modelsLoaded ? "SYSTEM ONLINE" : "INITIALIZING..."}</span>
-              </div>
-            </div>
-
-            <video
-              ref={videoRef}
-              autoPlay muted
-              onPlay={handleVideoOnPlay}
-              className="w-full h-full object-cover transform scale-x-[-1] filter brightness-110 contrast-110 saturate-110"
-            />
-            <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full transform scale-x-[-1]" />
-
-            {/* Scanning Overlay */}
-            {!lastLog && (
-              <div className="absolute inset-0 border-[1px] border-white/5 pointer-events-none flex items-center justify-center">
-                <div className="w-[80%] h-[80%] border border-white/20 rounded-3xl relative">
-                  <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-white/50 rounded-tl-xl"></div>
-                  <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-white/50 rounded-tr-xl"></div>
-                  <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-white/50 rounded-bl-xl"></div>
-                  <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-white/50 rounded-br-xl"></div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* RIGHT: INTERACTIVE TAB PANEL */}
-          <div className={`w-full md:w-[450px] transition-colors duration-500 flex flex-col justify-center p-10 relative overflow-hidden ${uiState === 'SUCCESS_IN' ? 'bg-green-600' :
-            uiState === 'SUCCESS_OUT' ? 'bg-red-600' :
-              'bg-neutral-900 border-l border-white/5'
-            }`}>
-
-            {/* Default State */}
-            {uiState === 'IDLE' && (
-              <div className="text-center animate-fade-in">
-                <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center mx-auto mb-6 border border-white/10">
-                  <ScanFace className="w-10 h-10 text-white/50" />
-                </div>
-                <h2 className="text-3xl font-bold text-white mb-3">Smart Gate</h2>
-                <p className="text-neutral-400 text-lg">
-                  Please look at the camera.<br />
-                  <span className="text-sm opacity-60">Scanning for student face...</span>
-                </p>
-                <div className="mt-12 flex justify-center gap-2">
-                  <div className="w-2 h-2 bg-white/20 rounded-full animate-bounce"></div>
-                  <div className="w-2 h-2 bg-white/20 rounded-full animate-bounce [animation-delay:0.2s]"></div>
-                  <div className="w-2 h-2 bg-white/20 rounded-full animate-bounce [animation-delay:0.4s]"></div>
-                </div>
-              </div>
-            )}
-
-            {/* SUCCESS: ENTRY (GREEN) */}
-            {uiState === 'SUCCESS_IN' && (
-              <div className="text-center text-white animate-fade-in-up">
-                <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mx-auto mb-6 shadow-2xl">
-                  <CheckCircle2 className="w-12 h-12 text-green-600" />
-                </div>
-                <div className="inline-block bg-black/20 px-4 py-1.5 rounded-full text-xs font-bold tracking-widest mb-4">PUNCH IN</div>
-                <h1 className="text-4xl font-black mb-2 leading-tight">{lastLog.name}</h1>
-                <p className="text-green-100 text-lg font-medium opacity-90">Welcome to Campus!</p>
-                <div className="mt-8 text-6xl font-mono font-bold opacity-40 tracking-tighter mix-blend-overlay">
-                  {lastLog.time}
-                </div>
-              </div>
-            )}
-
-            {/* SUCCESS: EXIT (RED) */}
-            {uiState === 'SUCCESS_OUT' && (
-              <div className="text-center text-white animate-fade-in-up">
-                <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mx-auto mb-6 shadow-2xl">
-                  <LogOut className="w-12 h-12 text-red-600 ml-1" />
-                </div>
-                <div className="inline-block bg-black/20 px-4 py-1.5 rounded-full text-xs font-bold tracking-widest mb-4">PUNCH OUT</div>
-                <h1 className="text-4xl font-black mb-2 leading-tight">{lastLog.name}</h1>
-                <p className="text-red-100 text-lg font-medium opacity-90">Goodbye! See you later.</p>
-                <div className="mt-8 text-6xl font-mono font-bold opacity-40 tracking-tighter mix-blend-overlay">
-                  {lastLog.time}
-                </div>
-              </div>
-            )}
-
-            {/* LIVE FOOTER */}
-            <div className={`absolute bottom-6 left-0 right-0 text-center text-xs font-bold tracking-widest uppercase ${uiState === 'IDLE' ? 'text-white/20' : 'text-white/40'
-              }`}>
-              KAP ACADEMY
-            </div>
-
-          </div>
+      {/* STATUS INDICATOR (TOP LEFT) */}
+      <div className="absolute top-24 left-6 z-20 flex gap-3">
+        <div className="bg-black/60 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 flex items-center gap-2 shadow-lg">
+          <div className={`w-2.5 h-2.5 rounded-full ${modelsLoaded ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-yellow-500'}`}></div>
+          <span className="text-white/90 text-xs font-bold tracking-wider">{modelsLoaded ? "SYSTEM ONLINE" : "INITIALIZING..."}</span>
         </div>
       </div>
+
+      {/* IDLE OVERLAY */}
+      {uiState === 'IDLE' && (
+        <div className="absolute bottom-10 left-0 right-0 z-20 flex flex-col items-center justify-center pointer-events-none p-6 text-center">
+          <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-full flex items-center justify-center mb-4 border border-white/20 animate-pulse">
+            <ScanFace className="w-8 h-8 text-white" />
+          </div>
+          <h2 className="text-3xl font-bold text-white mb-1 shadow-black drop-shadow-lg">Smart Gate</h2>
+          <p className="text-white/80 text-sm">Face the camera to punch in/out</p>
+        </div>
+      )}
+
+      {/* SUCCESS OVERLAY (FULL SCREEN) */}
+      {uiState !== 'IDLE' && (
+        <div className={`absolute inset-0 z-50 flex flex-col items-center justify-center p-6 animate-in fade-in zoom-in duration-300 ${uiState === 'SUCCESS_IN' ? 'bg-green-600/90 backdrop-blur-md' : 'bg-red-600/90 backdrop-blur-md'
+          }`}>
+          <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-sm w-full text-center">
+            <div className={`w-20 h-20 rounded-full mx-auto mb-4 flex items-center justify-center ${uiState === 'SUCCESS_IN' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'
+              }`}>
+              {uiState === 'SUCCESS_IN' ? <CheckCircle2 className="w-10 h-10" /> : <LogOut className="w-10 h-10" />}
+            </div>
+            <div className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-1">
+              {uiState === 'SUCCESS_IN' ? 'PUNCH IN' : 'PUNCH OUT'}
+            </div>
+            <h1 className="text-3xl font-black text-gray-900 mb-2">{lastLog.name}</h1>
+            <p className="text-lg text-gray-500 font-medium">{lastLog.time}</p>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

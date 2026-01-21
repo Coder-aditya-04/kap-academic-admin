@@ -79,7 +79,7 @@ function App() {
       <div className="min-h-screen bg-slate-50">
         <TopNav />
         {/* Main Content: Adjusted padding for TopNav */}
-        <div className="pt-24 px-8 pb-8">
+        <div className="pt-20 px-4 pb-4 md:pt-24 md:px-8 md:pb-8">
           <Routes>
             <Route path="/" element={<ScannerPage />} />
             <Route path="/students" element={<StudentManager />} />
