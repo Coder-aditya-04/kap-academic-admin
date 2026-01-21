@@ -16,6 +16,7 @@ const ScannerPage = () => {
   const isProcessing = useRef(false);
   const lastScanTime = useRef({});
   const audioCtxRef = useRef(null);
+  const intervalRef = useRef(null);
 
   // 1. SETUP: Configure AI & Load Models (TinyFace for Speed)
   useEffect(() => {
@@ -71,6 +72,13 @@ const ScannerPage = () => {
         .catch(err => console.error(err));
     }
   }, [modelsLoaded]);
+
+  // CLEANUP ON UNMOUNT (Critical for Mobile Performance)
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
 
   // UNLOCK AUDIO (Tap Handler) + Fast Beep Setup
   const unlockAudio = () => {
@@ -166,18 +174,23 @@ const ScannerPage = () => {
 
   // 4. DETECTION LOOP
   const handleVideoOnPlay = () => {
-    setInterval(async () => {
+    // Clear existing interval to prevent stacking (Key Fix for Lag)
+    if (intervalRef.current) clearInterval(intervalRef.current);
+
+    intervalRef.current = setInterval(async () => {
       if (videoRef.current && canvasRef.current && faceMatcher && !isProcessing.current) {
 
-        // Use TinyFaceDetector
-        // MODERATE THRESHOLD: 0.7 (Better for Tablets/Mobile, still strict enough)
-        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.7 });
+        // Use TinyFaceDetector with REDUCED Input Size and Freq (500ms)
+        // 416 is lighter than 512, 500ms is 5x lighter than 100ms
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.7 });
 
         const detection = await faceapi.detectSingleFace(videoRef.current, options)
           .withFaceLandmarks()
           .withFaceDescriptor();
 
         const displaySize = { width: videoRef.current.videoWidth, height: videoRef.current.videoHeight };
+        if (displaySize.width === 0) return;
+
         faceapi.matchDimensions(canvasRef.current, displaySize);
         const ctx = canvasRef.current.getContext('2d');
         ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
@@ -199,7 +212,6 @@ const ScannerPage = () => {
           }
 
           // 2. Score Check
-          // 0.85 is very high, 0.8 is safer for varying light
           if (score < 0.80) {
             setSecurityWarning("Low Quality / Glare");
             drawBox(ctx, box, 'orange');
@@ -211,7 +223,7 @@ const ScannerPage = () => {
           const centerX = box.x + (box.width / 2);
           const screenCenter = displaySize.width / 2;
           const offset = Math.abs(centerX - screenCenter);
-          if (offset > (displaySize.width * 0.35)) { // Allow 35% deviance
+          if (offset > (displaySize.width * 0.35)) {
             setSecurityWarning("Stand in Center");
             drawBox(ctx, box, 'blue');
             setDetectingName(null);
@@ -225,7 +237,7 @@ const ScannerPage = () => {
             const name = result.label.split(' (')[0];
             setDetectingName(name);
 
-            // DRAW NAME & BOX (Requested)
+            // DRAW NAME & BOX
             ctx.font = 'bold 24px sans-serif';
             ctx.fillStyle = '#00ff9d';
             ctx.fillText(name, box.x, box.y - 10);
@@ -234,7 +246,6 @@ const ScannerPage = () => {
             logAttendance(result.label);
           } else {
             setDetectingName(null);
-            // Optional: Draw red box for unknown
             drawBox(ctx, box, 'rgba(255,0,0,0.3)', 2);
           }
         } else {
@@ -244,7 +255,7 @@ const ScannerPage = () => {
           if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         }
       }
-    }, 100);
+    }, 500); // 500ms = 2 FPS (Massive performance boost for mobile)
   };
 
   return (
@@ -292,13 +303,7 @@ const ScannerPage = () => {
 
           {/* CIRCLE GUIDE */}
           <div className="absolute inset-0 z-10 pointer-events-none">
-            {/* Dark Overlay with Hole punch effect is hard in pure CSS without mask image,
-                 so we'll use a semi-transparent border trick or svg.
-                 Simpler: Dark vignette + Glow Circle */}
-
             <div className="absolute inset-0 bg-radial-gradient-vignette opacity-60"></div>
-
-            {/* THE GLOWING CIRCLE */}
             <div className={`
                 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2
                 w-[70vw] h-[70vw] max-w-[320px] max-h-[320px]
@@ -306,7 +311,6 @@ const ScannerPage = () => {
                 transition-all duration-300
                 ${detectingName ? 'border-green-400 shadow-[0_0_50px_#4ade80]' : 'border-white/30 shadow-[0_0_30px_rgba(255,255,255,0.1)]'}
              `}>
-              {/* Crosshair corners */}
               <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1 h-3 bg-white/50"></div>
               <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1 h-3 bg-white/50"></div>
               <div className="absolute left-0 top-1/2 -translate-y-1/2 w-3 h-1 bg-white/50"></div>
@@ -334,7 +338,7 @@ const ScannerPage = () => {
           )}
         </div>
 
-        {/* INFO PANEL - CHANGED md: to lg: */}
+        {/* INFO PANEL */}
         <div className={`
             absolute bottom-0 left-0 right-0 z-30
             lg:relative lg:w-96 lg:h-auto
